@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  train:
+    build: .
+    volumes:
+      - ./dataset:/workspace/dataset
+      - ./output:/workspace/output
+      - ./train.py:/workspace/train.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      train.py
+      --data_dir /workspace/dataset
+      --output_dir /workspace/output
+      --epochs_phase1 20
+      --epochs_phase2 50
+      --batch_size 64
+      --focal_loss
+      --use_class_weights
