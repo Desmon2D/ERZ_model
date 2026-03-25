@@ -1,64 +1,133 @@
 """
-Batch test: 10 images per category, top-3 predictions, accuracy stats.
+Batch test: проверка модели на датасете с расчётом accuracy.
+
+Использование:
+    # Указать папку с моделью (model_int8.tflite + label_map.json):
+    python batch_test.py --run_dir ./output/run_20260325_084645
+
+    # Или указать файлы явно:
+    python batch_test.py --model ./output/run_20260325_084645/model_int8.tflite \
+                         --labels ./output/run_20260325_084645/label_map.json
+
+    # Тест только определённых категорий:
+    python batch_test.py --run_dir ./output/run_20260325_084645 --categories 1 5 12 99
+
+    # Указать папку с данными и кол-во сэмплов:
+    python batch_test.py --run_dir ./output/run_20260325_084645 \
+                         --dataset_dir ./dataset --samples 20
 """
 
+import argparse
 import os
 import json
 import random
 import numpy as np
 from PIL import Image
+from collections import Counter, defaultdict
 
 # Suppress TF warnings
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-import tensorflow as tf
 
-MODEL_PATH = "./output/run_20260319_083744/model_int8.tflite"
-LABELS_PATH = "./output/run_20260319_083744/label_map.json"
-DATASET_DIR = "./dataset"
-SAMPLES_PER_CAT = 10
-IMG_SIZE = 224
-SEED = 42
+def load_model(model_path):
+    try:
+        from ai_edge_litert.interpreter import Interpreter
+    except ImportError:
+        try:
+            from tflite_runtime.interpreter import Interpreter
+        except ImportError:
+            import tensorflow as tf
+            Interpreter = tf.lite.Interpreter
+    interpreter = Interpreter(model_path=model_path, num_threads=os.cpu_count())
+    interpreter.allocate_tensors()
+    return interpreter
 
 
 def main():
-    random.seed(SEED)
+    parser = argparse.ArgumentParser(description="Batch test: accuracy по категориям")
+    parser.add_argument("--run_dir", type=str, default=None,
+                        help="Папка с результатами обучения (содержит model_int8.tflite и label_map.json)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Путь к model_int8.tflite")
+    parser.add_argument("--labels", type=str, default=None,
+                        help="Путь к label_map.json")
+    parser.add_argument("--dataset_dir", type=str, default="./dataset",
+                        help="Папка с датасетом (default: ./dataset)")
+    parser.add_argument("--categories", type=int, nargs="+", default=None,
+                        help="Список категорий для тестирования (по умолчанию — все)")
+    parser.add_argument("--samples", type=int, default=10,
+                        help="Количество изображений на категорию (default: 10)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
+    args = parser.parse_args()
+
+    # Resolve model and labels paths
+    if args.run_dir:
+        model_path = args.model or os.path.join(args.run_dir, "model_int8.tflite")
+        labels_path = args.labels or os.path.join(args.run_dir, "label_map.json")
+    elif args.model and args.labels:
+        model_path = args.model
+        labels_path = args.labels
+    else:
+        parser.error("Укажите --run_dir или оба --model и --labels")
+
+    if not os.path.isfile(model_path):
+        parser.error(f"Модель не найдена: {model_path}")
+    if not os.path.isfile(labels_path):
+        parser.error(f"Label map не найден: {labels_path}")
+
+    random.seed(args.seed)
 
     # Load model
-    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-    interpreter.allocate_tensors()
+    interpreter = load_model(model_path)
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Load label map (class_index -> category_id)
-    with open(LABELS_PATH) as f:
+    # Auto-detect image size from model
+    img_size = input_details[0]["shape"][1]
+    print(f"Модель: {model_path}")
+    print(f"IMG_SIZE: {img_size} (из модели)")
+    print(f"Датасет: {args.dataset_dir}")
+    print()
+
+    # Load label map
+    with open(labels_path) as f:
         label_map = json.load(f)
 
     # Discover categories
     valid_ext = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     categories = {}
-    for entry in sorted(os.listdir(DATASET_DIR)):
-        d_path = os.path.join(DATASET_DIR, entry, "d")
+    for entry in sorted(os.listdir(args.dataset_dir)):
+        d_path = os.path.join(args.dataset_dir, entry, "d")
         if not os.path.isdir(d_path):
             continue
         try:
             cat_id = int(entry)
         except ValueError:
             continue
+        # Filter by requested categories
+        if args.categories and cat_id not in args.categories:
+            continue
         files = [os.path.join(d_path, f) for f in os.listdir(d_path)
                  if os.path.splitext(f)[1].lower() in valid_ext]
         if files:
             categories[cat_id] = files
 
-    # Run inference
-    results = {}  # cat_id -> {total, correct, top3_correct, predictions}
+    if not categories:
+        print("Категории не найдены!")
+        return
 
+    print(f"Категорий: {len(categories)}, сэмплов/кат: {args.samples}")
+    print()
+
+    # Run inference
+    results = {}
     total_cats = len(categories)
+
     for i, cat_id in enumerate(sorted(categories.keys()), 1):
         files = categories[cat_id]
-        sample = random.sample(files, min(SAMPLES_PER_CAT, len(files)))
-        total_in_dataset = len(files)
+        sample = random.sample(files, min(args.samples, len(files)))
 
         correct = 0
         top3_correct = 0
@@ -66,7 +135,7 @@ def main():
 
         for img_path in sample:
             img = Image.open(img_path).convert("RGB")
-            img = img.resize((IMG_SIZE, IMG_SIZE), Image.BILINEAR)
+            img = img.resize((img_size, img_size), Image.BILINEAR)
             img_array = np.expand_dims(np.array(img, dtype=np.uint8), 0)
 
             interpreter.set_tensor(input_details[0]["index"], img_array)
@@ -89,24 +158,12 @@ def main():
 
             all_preds.append((top3_cats, top3_probs))
 
-        # Aggregate top-3 predictions (most common top-1)
-        from collections import Counter
+        n_tested = len(sample)
         top1_counts = Counter(p[0][0] for p in all_preds)
         most_common_top1 = top1_counts.most_common(3)
 
-        # Average probabilities for top-3 across samples
-        avg_probs = np.mean([p[1] for p in all_preds], axis=0)
-        avg_top3_cats_idx = np.argsort(np.mean(
-            [probs for _, probs in [(None, None)] * 0], axis=0) if False else avg_probs)
-
-        # Just use average top-3
-        avg_all = np.mean([[probs[i] for i in np.argsort(
-            [float(output[0][j]) for j in range(len(output[0]))])[::-1][:3]]
-            for _ in [None]], axis=0) if False else None
-
-        n_tested = len(sample)
         results[cat_id] = {
-            "total_in_dataset": total_in_dataset,
+            "total_in_dataset": len(files),
             "n_tested": n_tested,
             "top1_acc": correct / n_tested,
             "top3_acc": top3_correct / n_tested,
@@ -134,15 +191,11 @@ def main():
         total_top3 += int(r["top3_acc"] * n)
         total_tested += n
 
-        # Get aggregated top-3 from averaging all sample predictions
-        # Collect all top-1 predictions with their average confidence
-        from collections import defaultdict
         cat_probs = defaultdict(list)
         for top3_cats, top3_probs in r["sample_preds"]:
             for c, p in zip(top3_cats, top3_probs):
                 cat_probs[c].append(p)
 
-        # Sort by frequency then by avg probability
         sorted_preds = sorted(cat_probs.items(),
                               key=lambda x: (len(x[1]), np.mean(x[1])),
                               reverse=True)[:3]

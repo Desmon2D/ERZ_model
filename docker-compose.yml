@@ -15,7 +15,6 @@ services:
               count: 1
               capabilities: [gpu]
     command: >
-      train.py
       --data_dir /workspace/dataset
       --output_dir /workspace/output
       --epochs_phase1 20
@@ -23,3 +22,23 @@ services:
       --batch_size 64
       --focal_loss
       --use_class_weights
+
+  test:
+    build: .
+    entrypoint: ["python", "batch_test.py"]
+    volumes:
+      - ./dataset:/workspace/dataset
+      - ./output:/workspace/output
+      - ./batch_test.py:/workspace/batch_test.py
+      - ./predict.py:/workspace/predict.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      --run_dir /workspace/output/run_20260325_084645
+      --dataset_dir /workspace/dataset
+      --samples 20
