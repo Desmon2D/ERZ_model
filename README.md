@@ -53,7 +53,7 @@ python predict.py --model ... --labels ... --image photo1.jpg photo2.jpg
 python predict.py --model ... --labels ... --image_dir ./photos/ --top_k 3
 ```
 
-Зависимости (без TF): `pip install ai-edge-litert numpy Pillow`
+Зависимости (без TF): `uv pip install ai-edge-litert numpy Pillow`
 
 ## Пакетный тест
 
