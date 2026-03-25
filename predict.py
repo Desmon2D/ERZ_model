@@ -3,13 +3,20 @@
 Использует INT8 TFLite модель.
 
 Использование:
-    python predict.py --model ./output/run_20260319_083744/model_int8.tflite \
-                      --labels ./output/run_20260319_083744/label_map.json \
+    # Одно изображение:
+    python predict.py --model ./output/run_20260325_084645/model_int8.tflite \
+                      --labels ./output/run_20260325_084645/label_map.json \
                       --image photo.jpg
 
-    python predict.py --model ./output/run_20260319_083744/model_int8.tflite \
-                      --labels ./output/run_20260319_083744/label_map.json \
+    # Папка с изображениями:
+    python predict.py --model ./output/run_20260325_084645/model_int8.tflite \
+                      --labels ./output/run_20260325_084645/label_map.json \
                       --image_dir ./photos/ --top_k 3
+
+    # Несколько конкретных файлов:
+    python predict.py --model ./output/run_20260325_084645/model_int8.tflite \
+                      --labels ./output/run_20260325_084645/label_map.json \
+                      --image photo1.jpg photo2.jpg photo3.jpg
 """
 
 import argparse
@@ -23,12 +30,14 @@ from PIL import Image
 def load_model(model_path: str):
     """Загружает TFLite модель и возвращает интерпретатор."""
     try:
-        import tflite_runtime.interpreter as tflite
-        interpreter = tflite.Interpreter(model_path=model_path)
+        from ai_edge_litert.interpreter import Interpreter
     except ImportError:
-        import tensorflow as tf
-        interpreter = tf.lite.Interpreter(model_path=model_path)
-
+        try:
+            from tflite_runtime.interpreter import Interpreter
+        except ImportError:
+            import tensorflow as tf
+            Interpreter = tf.lite.Interpreter
+    interpreter = Interpreter(model_path=model_path, num_threads=os.cpu_count())
     interpreter.allocate_tensors()
     return interpreter
 
@@ -74,8 +83,8 @@ def main():
                         help="Путь к model_int8.tflite")
     parser.add_argument("--labels", type=str, required=True,
                         help="Путь к label_map.json")
-    parser.add_argument("--image", type=str, default=None,
-                        help="Путь к одному изображению")
+    parser.add_argument("--image", type=str, nargs="+", default=None,
+                        help="Путь к одному или нескольким изображениям")
     parser.add_argument("--image_dir", type=str, default=None,
                         help="Папка с изображениями для batch-предсказания")
     parser.add_argument("--top_k", type=int, default=5,
@@ -99,8 +108,8 @@ def main():
     image_paths = []
 
     if args.image:
-        image_paths.append(args.image)
-    else:
+        image_paths.extend(args.image)
+    if args.image_dir:
         for fname in sorted(os.listdir(args.image_dir)):
             if os.path.splitext(fname)[1].lower() in valid_ext:
                 image_paths.append(os.path.join(args.image_dir, fname))

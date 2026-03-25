@@ -10,10 +10,10 @@ WORKDIR /workspace
 RUN pip install --no-cache-dir numpy==1.26.4 Pillow==10.3.0
 
 # Код обучения
-COPY train1.py .
+COPY train.py .
 
 # Датасет и результаты монтируются снаружи
 VOLUME ["/workspace/dataset", "/workspace/output"]
 
-ENTRYPOINT ["python", "train1.py"]
+ENTRYPOINT ["python", "train.py"]
 CMD ["--help"]
