@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   train:
     build: .
@@ -7,6 +5,8 @@ services:
       - ./dataset:/workspace/dataset
       - ./output:/workspace/output
       - ./train.py:/workspace/train.py
+    tmpfs:
+      - /tmp:size=4g
     deploy:
       resources:
         reservations:

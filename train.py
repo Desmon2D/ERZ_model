@@ -238,7 +238,11 @@ def build_model(num_classes, img_size, dropout_rate, backbone_name):
 # 6. TFLITE
 # =============================================================================
 
-def convert_to_tflite(model, train_paths, img_size, run_dir, prep_fn):
+def convert_to_tflite(model, train_paths, img_size, run_dir, prep_fn,
+                      max_attempts: int = 3):
+    import shutil
+    import time
+
     def rep_data():
         for p in train_paths[:200]:
             img = tf.io.read_file(p)
@@ -247,20 +251,56 @@ def convert_to_tflite(model, train_paths, img_size, run_dir, prep_fn):
             img = prep_fn(img)
             yield [tf.expand_dims(img, 0)]
 
-    conv = tf.lite.TFLiteConverter.from_keras_model(model)
-    conv.optimizations = [tf.lite.Optimize.DEFAULT]
-    conv.representative_dataset = rep_data
-    conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    conv.inference_input_type = tf.uint8
-    conv.inference_output_type = tf.uint8
+    saved_dir = os.path.join(run_dir, "saved_model_for_tflite")
+    print(f"  Экспорт SavedModel: {saved_dir}")
+    if os.path.isdir(saved_dir):
+        shutil.rmtree(saved_dir)
+    if hasattr(model, "export"):
+        model.export(saved_dir)
+    else:
+        tf.saved_model.save(model, saved_dir)
+
+    try:
+        _ = tf.saved_model.load(saved_dir)
+    except Exception as exc:
+        print(f"  Предупреждение: повторная загрузка SavedModel: {exc}")
+        if os.path.isdir(saved_dir):
+            shutil.rmtree(saved_dir)
+        if hasattr(model, "export"):
+            model.export(saved_dir)
+        else:
+            tf.saved_model.save(model, saved_dir)
 
     print("  Конвертация TFLite INT8...")
-    tfl = conv.convert()
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            conv = tf.lite.TFLiteConverter.from_saved_model(saved_dir)
+            conv.optimizations = [tf.lite.Optimize.DEFAULT]
+            conv.representative_dataset = rep_data
+            conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+            conv.inference_input_type = tf.uint8
+            conv.inference_output_type = tf.uint8
+            tfl = conv.convert()
+            break
+        except Exception as exc:
+            last_exc = exc
+            print(f"  [попытка {attempt}/{max_attempts}] ошибка: {exc}")
+            if attempt < max_attempts:
+                time.sleep(2 * attempt)
+    else:
+        raise RuntimeError(
+            f"TFLite conversion failed after {max_attempts} attempts; "
+            f"SavedModel kept at {saved_dir}."
+        ) from last_exc
+
     path = os.path.join(run_dir, "model_int8.tflite")
     with open(path, "wb") as f:
         f.write(tfl)
     mb = os.path.getsize(path) / 1024 / 1024
     print(f"  Сохранено: {path} ({mb:.2f} MB)")
+
+    shutil.rmtree(saved_dir, ignore_errors=True)
 
 
 # =============================================================================
